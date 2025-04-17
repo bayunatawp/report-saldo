@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <title>Pemantauan CI BI Fast</title>
+  <link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.css" rel="stylesheet">
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; max-width: 700px; margin: auto; }
+    label { display: block; margin-top: 15px; }
+    textarea, select, button { width: 100%; padding: 10px; margin-top: 5px; }
+    .btn { background-color: #007BFF; color: white; border: none; cursor: pointer; font-size: 16px; }
+    .output { margin-top: 20px; white-space: pre-wrap; background: #f9f9f9; padding: 15px; border-radius: 5px; }
+  </style>
+</head>
+<body>
+
+  <h2>Pemantauan CI BI Fast</h2>
+
+  <label for="placeTime">Waktu Place Order (Interval 15 Menit):</label>
+  <select id="placeTime" placeholder="Pilih interval waktu..."></select>
+
+  <label for="logInput">Masukkan Log Notifikasi:</label>
+  <textarea id="logInput" rows="10" placeholder="Paste log notifikasi di sini..."></textarea>
+
+  <label for="reasonInput" id="reasonLabel" style="display:none;">Alasan selisih besar (≥ 50 juta):</label>
+  <textarea id="reasonInput" rows="3" placeholder="Masukkan alasan selisih besar..." style="display:none;"></textarea>
+
+  <button class="btn" onclick="generateReport()">Buat Laporan</button>
+
+  <div class="output" id="output"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
+  <script>
+    function pad(n) {
+      return n < 10 ? '0' + n : n;
+    }
+
+    function populateTimeRanges() {
+      const select = document.getElementById("placeTime");
+      const now = new Date();
+      const currentMinutes = now.getHours() * 60 + now.getMinutes();
+      const nextBlock = Math.ceil(currentMinutes / 15) * 15;
+      const nextStart = (nextBlock - 15 + 1440) % 1440;
+      const nextEnd = nextBlock % 1440;
+      const defaultValue = `${pad(Math.floor(nextStart / 60))}:${pad(nextStart % 60)} - ${pad(Math.floor(nextEnd / 60))}:${pad(nextEnd % 60)}`;
+
+      for (let i = 0; i < 96; i++) {
+        const startMinutes = i * 15;
+        const endMinutes = (startMinutes + 15) % 1440;
+        const label = `${pad(Math.floor(startMinutes / 60))}:${pad(startMinutes % 60)} - ${pad(Math.floor(endMinutes / 60))}:${pad(endMinutes % 60)}`;
+        const option = document.createElement("option");
+        option.value = label;
+        option.text = label;
+        if (label === defaultValue) option.selected = true;
+        select.appendChild(option);
+      }
+
+      new TomSelect("#placeTime", {
+        create: false,
+        sortField: false,
+        maxOptions: null, // Ensure all 96 options are shown
+        render: {
+          item: function(data, escape) {
+            return `<div>${escape(data.text)}</div>`;
+          },
+          option: function(data, escape) {
+            return `<div>${escape(data.text)}</div>`;
+          }
+        }
+      });
+    }
+
+    function parseLog(text) {
+      const entries = text.split(/BPD_BALI_NOTIFICATION_FDS,\s*\[/g).slice(1);
+      const result = [];
+
+      entries.forEach(entry => {
+        const headerMatch = entry.match(/(\d{1,2})\/(\d{1,2})\/(\d{4}) (\d{1,2}):(\d{2}) (AM|PM)/);
+        if (!headerMatch) return;
+
+        let [, month, day, year, h, m, ampm] = headerMatch;
+        let hour = parseInt(h), minute = parseInt(m);
+        if (ampm === "PM" && hour !== 12) hour += 12;
+        if (ampm === "AM" && hour === 12) hour = 0;
+
+        const timeInMin = hour * 60 + minute;
+
+        const diffMatch = entry.match(/perbedaan saldo:\s*([\d.,]+)/i);
+        if (!diffMatch) return;
+
+        const raw = diffMatch[1].replace(/[^\d]/g, '');
+        const diff = parseInt(raw) || 0;
+
+        result.push({ time: timeInMin, diff });
+      });
+
+      return result;
+    }
+
+    function findClosestDiff(parsedLog, targetMinutes) {
+      let closest = null;
+      let minDiff = Infinity;
+
+      parsedLog.forEach(entry => {
+        const diffTime = Math.abs(entry.time - targetMinutes);
+        if (
+          diffTime < minDiff ||
+          (diffTime === minDiff && entry.time > (closest?.time || 0))
+        ) {
+          minDiff = diffTime;
+          closest = entry;
+        }
+      });
+
+      return closest || { time: null, diff: 0 };
+    }
+
+    function generateReport() {
+      const selected = document.getElementById("placeTime").value;
+      const [start, end] = selected.split(" - ");
+      const [startH, startM] = start.split(":").map(Number);
+
+      const logText = document.getElementById("logInput").value;
+      if (!logText.trim()) {
+        alert("Silakan masukkan log notifikasi terlebih dahulu.");
+        return;
+      }
+
+      const parsed = parseLog(logText);
+
+      const intervalTimes = [];
+      const endTimes = [];
+      let h = startH, m = startM;
+
+      for (let i = 0; i < 3; i++) {
+        const from = `${pad(h)}:${pad(m)}`;
+        m += 5;
+        if (m >= 60) {
+          m -= 60;
+          h = (h + 1) % 24;
+        }
+        const to = `${pad(h)}:${pad(m)}`;
+        intervalTimes.push([from, to]);
+        endTimes.push(h * 60 + m);
+      }
+
+      const date = new Date();
+      const formattedDate = date.toLocaleDateString('id-ID', {
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric'
+      });
+
+      let report = `Pemantauan *CI BI Fast* , ${formattedDate}
+Periode Pukul : *${selected}*`;
+
+      let hasBigDiff = false;
+
+      for (let i = 0; i < 3; i++) {
+        const entry = findClosestDiff(parsed, endTimes[i]);
+        const diff = entry.diff || 0;
+
+        // Only add the `+-` once, and make sure the "diff" value is displayed correctly
+        report += `\n- Pukul *${intervalTimes[i][0]}- ${intervalTimes[i][1]}* : +- ${diff === 0 ? '(tidak ditemukan)' : diff.toLocaleString('id-ID')}`;
+      }
+
+      // Add reason once if there is a big diff
+      if (hasBigDiff) {
+        const reasonText = document.getElementById("reasonInput").value.trim();
+        if (reasonText) {
+          report += `\n\nAlasan: ${reasonText}`;
+        }
+      }
+
+      report += `\nDemikian disampaikan, terima kasih`;
+
+      document.getElementById("output").innerText = report;
+
+      // Tampilkan textarea alasan jika ada selisih besar
+      const reasonInput = document.getElementById("reasonInput");
+      const reasonLabel = document.getElementById("reasonLabel");
+      if (hasBigDiff) {
+        reasonInput.style.display = "block";
+        reasonLabel.style.display = "block";
+      } else {
+        reasonInput.style.display = "none";
+        reasonLabel.style.display = "none";
+        reasonInput.value = ""; // reset jika sebelumnya muncul
+      }
+    }
+
+    populateTimeRanges();
+  </script>
+
+</body>
+</html>
