@@ -74,16 +74,34 @@
       const entries = text.split(/BPD_BALI_NOTIFICATION_FDS,\s*\[/g).slice(1);
       const result = [];
 
+      const datePattern1 = /(\d{1,2})\/(\d{1,2})\/(\d{4}) (\d{1,2}):(\d{2}) (AM|PM)/; // Format 1: 4/17/2025 11:28 PM
+      const datePattern2 = /([A-Za-z]+ \d{1,2}, \d{4}) at (\d{1,2}):(\d{2})/; // Format 2: Apr 17, 2025 at 23:32
+
       entries.forEach(entry => {
-        const headerMatch = entry.match(/(\d{1,2})\/(\d{1,2})\/(\d{4}) (\d{1,2}):(\d{2}) (AM|PM)/);
+        let headerMatch;
+        // Try to match the first pattern (4/17/2025 11:28 PM)
+        headerMatch = entry.match(datePattern1);
+        if (!headerMatch) {
+          // If first pattern doesn't match, try the second pattern (Apr 17, 2025 at 23:32)
+          headerMatch = entry.match(datePattern2);
+        }
+
         if (!headerMatch) return;
 
-        let [, month, day, year, h, m, ampm] = headerMatch;
-        let hour = parseInt(h), minute = parseInt(m);
-        if (ampm === "PM" && hour !== 12) hour += 12;
-        if (ampm === "AM" && hour === 12) hour = 0;
+        let month, day, year, hour, minute, ampm;
+        if (headerMatch[6]) {
+          // Format 1: 4/17/2025 11:28 PM
+          [, month, day, year, hour, minute, ampm] = headerMatch;
+          if (ampm === "PM" && hour !== 12) hour = parseInt(hour) + 12;
+          if (ampm === "AM" && hour === 12) hour = 0;
+        } else {
+          // Format 2: Apr 17, 2025 at 23:32
+          [, month, day, year, hour, minute] = headerMatch;
+          const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+          month = months.indexOf(month) + 1;
+        }
 
-        const timeInMin = hour * 60 + minute;
+        const timeInMin = (parseInt(hour) * 60) + parseInt(minute);
 
         const diffMatch = entry.match(/perbedaan saldo:\s*([\d.,]+)/i);
         if (!diffMatch) return;
@@ -181,16 +199,3 @@ Periode Pukul : *${selected}*`;
       const reasonLabel = document.getElementById("reasonLabel");
       if (hasBigDiff) {
         reasonInput.style.display = "block";
-        reasonLabel.style.display = "block";
-      } else {
-        reasonInput.style.display = "none";
-        reasonLabel.style.display = "none";
-        reasonInput.value = ""; // reset jika sebelumnya muncul
-      }
-    }
-
-    populateTimeRanges();
-  </script>
-
-</body>
-</html>
