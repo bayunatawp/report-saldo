@@ -22,8 +22,8 @@
   <label for="logInput">Masukkan Log Notifikasi:</label>
   <textarea id="logInput" rows="10" placeholder="Paste log notifikasi di sini..."></textarea>
 
-  <label for="reasonInput" id="reasonLabel" style="display:none;">Alasan selisih besar (≥ 50 juta):</label>
-  <textarea id="reasonInput" rows="3" placeholder="Masukkan alasan selisih besar..." style="display:none;"></textarea>
+  <label id="reasonLabel" for="reasonInput" style="display: none;">Alasan selisih besar (≥ 50 juta):</label>
+  <textarea id="reasonInput" rows="3" placeholder="Masukkan alasan selisih besar..." style="display: none;"></textarea>
 
   <button class="btn" onclick="generateReport()">Buat Laporan</button>
 
@@ -37,12 +37,6 @@
 
     function populateTimeRanges() {
       const select = document.getElementById("placeTime");
-      const now = new Date();
-      const currentMinutes = now.getHours() * 60 + now.getMinutes();
-      const nextBlock = Math.ceil(currentMinutes / 15) * 15;
-      const nextStart = (nextBlock - 15 + 1440) % 1440;
-      const nextEnd = nextBlock % 1440;
-      const defaultValue = `${pad(Math.floor(nextStart / 60))}:${pad(nextStart % 60)} - ${pad(Math.floor(nextEnd / 60))}:${pad(nextEnd % 60)}`;
 
       for (let i = 0; i < 96; i++) {
         const startMinutes = i * 15;
@@ -51,22 +45,13 @@
         const option = document.createElement("option");
         option.value = label;
         option.text = label;
-        if (label === defaultValue) option.selected = true;
         select.appendChild(option);
       }
 
       new TomSelect("#placeTime", {
         create: false,
         sortField: false,
-        maxOptions: null, // Ensure all 96 options are shown
-        render: {
-          item: function(data, escape) {
-            return `<div>${escape(data.text)}</div>`;
-          },
-          option: function(data, escape) {
-            return `<div>${escape(data.text)}</div>`;
-          }
-        }
+        maxOptions: null
       });
     }
 
@@ -74,42 +59,36 @@
       const entries = text.split(/BPD_BALI_NOTIFICATION_FDS,\s*\[/g).slice(1);
       const result = [];
 
-      const datePattern1 = /(\d{1,2})\/(\d{1,2})\/(\d{4}) (\d{1,2}):(\d{2}) (AM|PM)/; // Format 1: 4/17/2025 11:28 PM
-      const datePattern2 = /([A-Za-z]+ \d{1,2}, \d{4}) at (\d{1,2}):(\d{2})/; // Format 2: Apr 17, 2025 at 23:32
-
       entries.forEach(entry => {
-        let headerMatch;
-        // Try to match the first pattern (4/17/2025 11:28 PM)
-        headerMatch = entry.match(datePattern1);
-        if (!headerMatch) {
-          // If first pattern doesn't match, try the second pattern (Apr 17, 2025 at 23:32)
-          headerMatch = entry.match(datePattern2);
-        }
+        let timeInMin = null;
 
-        if (!headerMatch) return;
-
-        let month, day, year, hour, minute, ampm;
-        if (headerMatch[6]) {
-          // Format 1: 4/17/2025 11:28 PM
-          [, month, day, year, hour, minute, ampm] = headerMatch;
-          if (ampm === "PM" && hour !== 12) hour = parseInt(hour) + 12;
+        // Format 1: 4/17/2025 11:28 PM
+        const match1 = entry.match(/(\d{1,2})\/(\d{1,2})\/(\d{4}) (\d{1,2}):(\d{2}) (AM|PM)/);
+        if (match1) {
+          let [, month, day, year, hour, minute, ampm] = match1;
+          hour = parseInt(hour);
+          if (ampm === "PM" && hour !== 12) hour += 12;
           if (ampm === "AM" && hour === 12) hour = 0;
-        } else {
-          // Format 2: Apr 17, 2025 at 23:32
-          [, month, day, year, hour, minute] = headerMatch;
-          const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-          month = months.indexOf(month) + 1;
+          timeInMin = hour * 60 + parseInt(minute);
         }
 
-        const timeInMin = (parseInt(hour) * 60) + parseInt(minute);
+        // Format 2: Apr 17, 2025 at 23:32
+        const match2 = entry.match(/([A-Za-z]+) (\d{1,2}), (\d{4}) at (\d{1,2}):(\d{2})/);
+        if (match2) {
+          let [, monthStr, day, year, hour, minute] = match2;
+          const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+          let month = months.findIndex(m => monthStr.startsWith(m)) + 1;
+          timeInMin = parseInt(hour) * 60 + parseInt(minute);
+        }
 
-        const diffMatch = entry.match(/perbedaan saldo:\s*([\d.,]+)/i);
-        if (!diffMatch) return;
-
-        const raw = diffMatch[1].replace(/[^\d]/g, '');
-        const diff = parseInt(raw) || 0;
-
-        result.push({ time: timeInMin, diff });
+        if (timeInMin !== null) {
+          const diffMatch = entry.match(/perbedaan saldo:\s*([\d.,]+)/i);
+          if (diffMatch) {
+            const raw = diffMatch[1].replace(/[^\d]/g, '');
+            const diff = parseInt(raw) || 0;
+            result.push({ time: timeInMin, diff });
+          }
+        }
       });
 
       return result;
@@ -121,10 +100,7 @@
 
       parsedLog.forEach(entry => {
         const diffTime = Math.abs(entry.time - targetMinutes);
-        if (
-          diffTime < minDiff ||
-          (diffTime === minDiff && entry.time > (closest?.time || 0))
-        ) {
+        if (diffTime < minDiff || (diffTime === minDiff && entry.time > (closest?.time || 0))) {
           minDiff = diffTime;
           closest = entry;
         }
@@ -138,13 +114,7 @@
       const [start, end] = selected.split(" - ");
       const [startH, startM] = start.split(":").map(Number);
 
-      const logText = document.getElementById("logInput").value;
-      if (!logText.trim()) {
-        alert("Silakan masukkan log notifikasi terlebih dahulu.");
-        return;
-      }
-
-      const parsed = parseLog(logText);
+      const parsed = parseLog(document.getElementById("logInput").value);
 
       const intervalTimes = [];
       const endTimes = [];
@@ -169,33 +139,43 @@
         year: 'numeric'
       });
 
-      let report = `Pemantauan *CI BI Fast* , ${formattedDate}
-Periode Pukul : *${selected}*`;
+      let report = `Pemantauan *CI BI Fast* , ${formattedDate}\nPeriode Pukul : *${selected}*`;
 
-      let hasBigDiff = false;
+      let showReason = false;
+      const diffs = [];
 
       for (let i = 0; i < 3; i++) {
-        const entry = findClosestDiff(parsed, endTimes[i]);
-        const diff = entry.diff || 0;
+        const { diff } = findClosestDiff(parsed, endTimes[i]);
+        diffs.push(diff);
+        if (diff >= 50000000) showReason = true;
 
-        // Only add the `+-` once, and make sure the "diff" value is displayed correctly
-        report += `\n- Pukul *${intervalTimes[i][0]}- ${intervalTimes[i][1]}* : +- ${diff === 0 ? '(tidak ditemukan)' : diff.toLocaleString('id-ID')}`;
+        const range = intervalTimes[i];
+        const formattedDiff = diff ? diff.toLocaleString('id-ID') : '0';
+        report += `\n- Pukul *${range[0]}- ${range[1]}* : +- ${formattedDiff}`;
       }
 
-      // Add reason once if there is a big diff
-      if (hasBigDiff) {
-        const reasonText = document.getElementById("reasonInput").value.trim();
+      const reasonInput = document.getElementById("reasonInput");
+      const reasonLabel = document.getElementById("reasonLabel");
+
+      if (showReason) {
+        reasonInput.style.display = "block";
+        reasonLabel.style.display = "block";
+        const reasonText = reasonInput.value.trim();
         if (reasonText) {
           report += `\n\nAlasan: ${reasonText}`;
         }
+      } else {
+        reasonInput.style.display = "none";
+        reasonLabel.style.display = "none";
       }
 
-      report += `\nDemikian disampaikan, terima kasih`;
+      report += `\nDemikian disampaikan, terima kasih`;
 
       document.getElementById("output").innerText = report;
+    }
 
-      // Tampilkan textarea alasan jika ada selisih besar
-      const reasonInput = document.getElementById("reasonInput");
-      const reasonLabel = document.getElementById("reasonLabel");
-      if (hasBigDiff) {
-        reasonInput.style.display = "block";
+    populateTimeRanges();
+  </script>
+
+</body>
+</html>
